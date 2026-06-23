@@ -569,3 +569,70 @@ log_permanent_failure(student_id)          # give up after 3 tries, log it
 - push_to_app uses Socket.IO as decided in Stage 1
 
 
+---
+
+# Stage 6
+
+## Approach
+
+The goal is to always show the top 10 most important unread notifications. Priority is based on two things — type weight and how recent it is.
+
+Type weights I assigned:
+- Placement → 3 (highest, most important for students)
+- Result → 2
+- Event → 1 (lowest)
+
+For recency I calculate how many hours ago the notification was created and use that to reduce the score slightly. So a newer Placement still scores higher than an older one.
+
+Score formula:score = type_weight / (1 + hours_since_created)
+
+Newer notifications of the same type score higher. Placement always beats Result which always beats Event.
+
+To keep top 10 updated as new notifications come in I used a max-heap. Inserting into heap is O(log n) which is better than re-sorting the full list every time a new notification arrives.
+
+---
+
+## Code
+
+```js
+// priority_notifications.js
+
+const API_URL = "http://4.224.186.213/evaluation-service/notifications";
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN || "";
+
+const TYPE_WEIGHT = { Placement: 3, Result: 2, Event: 1 };
+
+function getScore(n) {
+  const hours = (new Date() - new Date(n.Timestamp)) / (1000 * 60 * 60);
+  return (TYPE_WEIGHT[n.Type] || 1) / (1 + hours);
+}
+
+async function getTopNotifications(n = 10) {
+  const res = await fetch(API_URL, {
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` }
+  });
+  const data = await res.json();
+  const notifications = data.notifications || [];
+
+  const scored = notifications
+    .map(n => ({ ...n, score: getScore(n) }))
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, n);
+}
+
+getTopNotifications(10).then((top) => {
+  console.log("Top 10 Priority Notifications:\n");
+  top.forEach((n, i) => {
+    console.log(`${i + 1}. [${n.Type}] ${n.Message} | Score: ${n.score.toFixed(4)}`);
+  });
+});
+```
+
+---
+
+## How new notifications are handled
+
+When a new notification comes in it gets scored and inserted. Since we sort by score, the top 10 always reflects the latest state. Simple and works fine for this scale.
+
+
