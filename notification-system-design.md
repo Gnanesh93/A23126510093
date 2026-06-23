@@ -227,3 +227,124 @@ Status codes I'm using:
 - 401 – not logged in / bad token
 - 404 – resource not found
 - 500 – something broke on the server
+
+---
+
+# Stage 2
+
+## Which DB did I pick and why?
+
+I went with MongoDB. The notification data maps naturally to documents — each notification is basically a JSON object with an id, type, message, read status and timestamp. MongoDB stores data exactly like that so it fits well here.
+
+Also since I'm more comfortable with MongoDB and Mongoose, it'll be easier to implement correctly in the actual code.
+
+---
+
+## DB Schema (Mongoose)
+
+```js
+// students collection
+{
+  _id: ObjectId,
+  name: String,
+  email: String,        // unique
+  password: String,     // hashed
+  createdAt: Date
+}
+
+// notifications collection
+{
+  _id: ObjectId,
+  studentId: ObjectId,  // ref to students
+  type: String,         // enum: Event, Result, Placement
+  message: String,
+  isRead: Boolean,      // default false
+  createdAt: Date       // default now
+}
+```
+
+---
+
+## Problems as data grows
+
+With 50,000 students and 5,000,000 notifications:
+
+1. **Queries slow down** — finding all unread notifications for a student scans the whole collection if there's no index on studentId and isRead. With 5M documents that's very slow.
+
+2. **Count queries are expensive** — countDocuments() with a filter on every request adds up fast at scale.
+
+3. **Fetching everything at once** — if we don't paginate and just return all notifications for a student, the response payload gets huge and memory usage spikes.
+
+4. **Storage** — old notifications pile up and slow down queries even though nobody reads them.
+
+---
+
+## How I'd fix these
+
+**Add indexes:**
+```js
+notificationSchema.index({ studentId: 1 });
+notificationSchema.index({ studentId: 1, isRead: 1 });
+notificationSchema.index({ createdAt: -1 });
+```
+
+**Cache unread count in Redis** — instead of running countDocuments every time, store the count and update it when a notification is read or a new one arrives.
+
+**Paginate everything** — never return the full list, always use limit and skip or cursor based pagination.
+
+**TTL index for old data** — MongoDB supports TTL indexes that auto-delete documents after a certain time, useful for archiving old notifications automatically.
+
+```js
+notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90 days
+```
+
+---
+
+## Queries
+
+**GET /notifications**
+```js
+await Notification.find({ studentId })
+  .sort({ createdAt: -1 })
+  .skip((page - 1) * limit)
+  .limit(limit);
+```
+
+With type filter:
+```js
+await Notification.find({ studentId, type })
+  .sort({ createdAt: -1 })
+  .skip((page - 1) * limit)
+  .limit(limit);
+```
+
+**GET /notifications/:id**
+```js
+await Notification.findOne({ _id: id, studentId });
+```
+
+**GET /notifications/unread-count**
+```js
+await Notification.countDocuments({ studentId, isRead: false });
+```
+
+**PATCH /notifications/:id/read**
+```js
+await Notification.findOneAndUpdate(
+  { _id: id, studentId },
+  { isRead: true }
+);
+```
+
+**PATCH /notifications/read-all**
+```js
+await Notification.updateMany(
+  { studentId, isRead: false },
+  { isRead: true }
+);
+```
+
+**DELETE /notifications/:id**
+```js
+await Notification.findOneAndDelete({ _id: id, studentId });
+```
