@@ -348,3 +348,90 @@ await Notification.updateMany(
 ```js
 await Notification.findOneAndDelete({ _id: id, studentId });
 ```
+
+---
+
+# Stage 3
+
+## Is the query accurate?
+
+```sql
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt ASC;
+```
+
+The logic is correct — fetching unread notifications for a student ordered oldest first makes sense. But since we're using MongoDB, this is not how we'd write it. The equivalent in Mongoose would be:
+
+```js
+await Notification.find({ studentId: "1042", isRead: false })
+  .sort({ createdAt: 1 });
+```
+
+---
+
+## Why is it slow?
+
+With 5,000,000 notifications and no indexes, MongoDB has to scan every single document in the collection to find the ones matching that studentId and isRead. That's a full collection scan on 5M documents every time someone opens their notifications. That's why it's slow.
+
+With the compound index we added in Stage 2 on `{ studentId, isRead }`, MongoDB can jump directly to that student's unread documents instead of scanning everything. Query time drops from scanning 5M docs to scanning just that student's records.
+
+---
+
+## Should we add indexes on every column?
+
+No, that's not good advice. Indexes speed up reads but every index has to be updated on every write (insert, update, delete). If you index every field:
+
+- inserts and updates become slower because all indexes need updating
+- more memory and disk space is used for index storage
+- MongoDB's query planner can get confused picking between too many indexes
+
+Only index fields you actually query or filter on. In our case `studentId`, `isRead`, `createdAt` make sense because we filter and sort on them constantly. Indexing `message` for example would be completely pointless.
+
+---
+
+## Query to find all students who got a Placement notification in the last 7 days
+
+```js
+await Notification.find({
+  type: "Placement",
+  createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+}).distinct("studentId");
+```
+
+If you want student details along with it:
+
+```js
+await Notification.aggregate([
+  {
+    $match: {
+      type: "Placement",
+      createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    }
+  },
+  {
+    $group: {
+      _id: "$studentId"
+    }
+  },
+  {
+    $lookup: {
+      from: "students",
+      localField: "_id",
+      foreignField: "_id",
+      as: "studentInfo"
+    }
+  },
+  {
+    $unwind: "$studentInfo"
+  },
+  {
+    $project: {
+      _id: 0,
+      studentId: "$_id",
+      name: "$studentInfo.name",
+      email: "$studentInfo.email"
+    }
+  }
+]);
+```
