@@ -14,21 +14,30 @@ import NotificationsIcon from "@mui/icons-material/Notifications";
 import { NotificationCard } from "../components/NotificationCard";
 import { NotificationFilter } from "../components/NotificationFilter";
 import { useNotifications } from "../hooks/useNotifications";
+import { useNotificationContext } from "../context/NotificationContext";
 
 export function NotificationsPage() {
-  const [filter, setFilter] = useState();
-  const [page, setPage] = useState("1");
+  const [filter, setFilter] = useState("All");
+  const [page, setPage] = useState(1);
 
-  const { notifications, totalPages, loading, error } = useNotifications();
+  const params = {
+    notification_type: filter === "All" ? undefined : filter,
+    page
+  };
 
-  const unreadCount = 2;
+  const { notifications, loading, error } = useNotifications(params);
+  const { markAsRead, markAllAsRead, isRead } = useNotificationContext();
+
+  const unreadCount = notifications.filter(n => !isRead(n.ID)).length;
+  const totalPages = 5;
 
   const handleFilterChange = (newFilter) => {
-
+    setFilter(newFilter);
+    setPage(1);
   };
 
   const handlePageChange = (_, newPage) => {
-
+    setPage(newPage);
   };
 
   return (
@@ -48,24 +57,29 @@ export function NotificationsPage() {
         <NotificationFilter value={filter} onChange={handleFilterChange} />
       </Box>
 
-      {true && (
+      {loading && (
         <Box display="flex" justifyContent="center" py={6}>
           <CircularProgress />
         </Box>
       )}
 
       {!loading && error && (
-        <Alert severity="error">Failed to load notifications: {error}</Alert>
+        <Alert severity="error">Failed to load notifications</Alert>
       )}
 
-      {loading && !error && notifications.length == "0" && (
-        <Alert severity="info">Something message</Alert>
+      {!loading && !error && notifications.length === 0 && (
+        <Alert severity="info">No notifications found</Alert>
       )}
 
-      {loading && !error && notifications.length > 0 && (
+      {!loading && !error && notifications.length > 0 && (
         <Stack spacing={1.5}>
           {notifications.map((n) => (
-            <></>
+            <NotificationCard
+              key={n.ID}
+              notification={n}
+              isRead={isRead(n.ID)}
+              onClick={markAsRead}
+            />
           ))}
         </Stack>
       )}
